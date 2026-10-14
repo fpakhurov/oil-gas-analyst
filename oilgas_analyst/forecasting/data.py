@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import logging
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -47,8 +48,14 @@ class PriceHistory:
 def _from_yahoo(ticker: str, start: date) -> pd.Series:
     import yfinance as yf
 
-    df = yf.download(ticker, start=start.isoformat(), progress=False, auto_adjust=False)
-    if df is None or df.empty:
+    # Yahoo периодически отдаёт пустой ответ («possibly delisted») — повторяем, прежде чем уйти
+    # на резервный источник: FRED даёт спот, а не фьючерс, и прогноз стал бы несопоставим
+    for attempt in range(3):
+        df = yf.download(ticker, start=start.isoformat(), progress=False, auto_adjust=False)
+        if df is not None and not df.empty:
+            break
+        time.sleep(2 * (attempt + 1))
+    else:
         raise ValueError(f"yfinance вернул пустые данные для {ticker}")
     close = df["Close"]
     if isinstance(close, pd.DataFrame):  # новые версии yfinance отдают MultiIndex-колонки
