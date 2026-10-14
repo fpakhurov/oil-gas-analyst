@@ -44,8 +44,8 @@ def main(selected: list[int]) -> int:
         f"Модель: `{s.llm_model}` (effort={s.llm_effort}), веб-поиск: "
         f"{'Tavily' if s.tavily_api_key else 'DuckDuckGo'}, эмбеддинги: `{s.embedding_model}`.",
         "",
-        "Под каждым ответом — трасса: что нашёл автопоиск по базе отчётов (шаг 1 правила приоритизации) "
-        "и какие инструменты агент вызвал сам.",
+        "Под каждым ответом — трасса: что нашёл автопоиск по базе отчётов (шаг 1 правила приоритизации), "
+        "какие инструменты агент вызвал сам, результат автоматической проверки цитат и чисел и стоимость.",
         "",
     ]
     for i, (title, questions) in enumerate(SCENARIOS, 1):
@@ -68,7 +68,23 @@ def main(selected: list[int]) -> int:
                 lines.append(f"- Инструмент `{tc['name']}`: `{json.dumps(tc['args'], ensure_ascii=False)}`")
             for art in turn.artifacts:
                 if art.get("kind") == "web" and art.get("dropped"):
-                    lines.append(f"- Фильтр источников отсеял: " + ", ".join(d["url"] for d in art["dropped"]))
+                    lines.append("- Фильтр источников отсеял: " + ", ".join(d["url"] for d in art["dropped"]))
+            if turn.verification:
+                c, n = turn.verification["citations"], turn.verification["numbers"]
+                lines.append(f"- Проверка: цитаты подтверждены {c['verified']}/{c['total']}, "
+                             f"числа найдены в источниках {n['grounded']}/{n['total']}")
+                for item in c["items"]:
+                    if item["status"] != "ok":
+                        lines.append(f"  - ⚠️ `{item['raw']}` — {item['detail']}")
+                for u in n["ungrounded"][:5]:
+                    lines.append(f"  - число {u['value']} не найдено в источниках: «{u['context'][:120]}»")
+            u = turn.usage
+            if u.get("calls"):
+                calls = f"{u['calls']} " + ("вызов" if u["calls"] % 10 == 1 and u["calls"] % 100 != 11 else
+                                            "вызова" if u["calls"] % 10 in (2, 3, 4) and u["calls"] % 100 not in (12, 13, 14)
+                                            else "вызовов")
+                lines.append(f"- Стоимость: ${u['cost_usd']:.3f} ({calls} модели; токены вход "
+                             f"{u['input_tokens']}, из кэша {u['cache_read']}, выход {u['output_tokens']})")
             lines += [f"- Время ответа: {dt:.0f} с", "", "</details>", ""]
         out.write_text("\n".join(lines), encoding="utf-8")
     print(f"→ {out}")

@@ -11,3 +11,5 @@ dist/
 data/chroma/
 .claude/
 *.docx
+data/*.sqlite
+data/*.sqlite-*

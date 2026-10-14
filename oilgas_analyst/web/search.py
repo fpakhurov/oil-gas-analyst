@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 from oilgas_analyst.config import Settings, get_settings
@@ -75,10 +76,23 @@ def _ddg(query: str, max_results: int, topic: str, days: int | None) -> list[dic
     return []
 
 
+def iso_date(raw: str | None) -> str:
+    """Дата публикации из выдачи → YYYY-MM-DD (Tavily отдаёт RFC 2822: 'Thu, 08 Oct 2026 12:00:00 GMT')."""
+    if not raw:
+        return ""
+    raw = raw.strip()
+    if re.match(r"\d{4}-\d{2}-\d{2}", raw):
+        return raw[:10]
+    from email.utils import parsedate_to_datetime
+
+    try:
+        return parsedate_to_datetime(raw).date().isoformat()
+    except (TypeError, ValueError):
+        return ""
+
+
 def date_from_url(url: str) -> str:
     """Дата публикации часто зашита в URL новостей: …/2026/10/4/…, …-2026-10-04/, /20261004/."""
-    import re
-
     m = re.search(r"(20\d{2})[/-](0?[1-9]|1[0-2])[/-](3[01]|[12]\d|0?[1-9])(?!\d)", url) or re.search(
         r"/(20\d{2})(0[1-9]|1[0-2])(3[01]|[12]\d|0[1-9])/", url)
     return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}" if m else ""
@@ -86,7 +100,6 @@ def date_from_url(url: str) -> str:
 
 def _ddg_html(query: str, max_results: int, timelimit: str | None) -> list[dict]:
     import html
-    import re
     from urllib.parse import parse_qs, unquote, urlparse
 
     import requests
@@ -141,7 +154,8 @@ def web_search(query: str, topic: str = "news", days: int | None = 30, max_resul
         if v.blocked:
             dropped.append({"url": r["url"], "reason": v.reason})
             continue
-        kept.append(WebResult(r["title"], r["url"], (r["snippet"] or "")[:1200], r["published"] or "",
+        published = iso_date(r["published"]) or date_from_url(r["url"])
+        kept.append(WebResult(r["title"], r["url"], (r["snippet"] or "")[:1200], published,
                               v.name, v.tier, v.tier_label))
     kept.sort(key=lambda w: w.tier)  # стабильная сортировка: внутри уровня сохраняем порядок релевантности
     return kept[:n], {"provider": provider, "dropped": dropped, "raw_count": len(raw)}

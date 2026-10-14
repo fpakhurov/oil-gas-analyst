@@ -83,6 +83,11 @@ def run_forecast(benchmark: str = "brent", horizon_months: int = 3, confidence: 
             "upper": _series_payload(ens.upper),
             "methods": {m.method: _series_payload(m.mean) for m in res.methods},
         },
+        "method_info": [
+            {"method": m.method, "details": m.details, "weight": round(m.weight or 0, 3),
+             "backtest_mape": round(m.backtest_mape, 4) if m.backtest_mape is not None and np.isfinite(m.backtest_mape) else None}
+            for m in res.methods
+        ],
     }
     return "\n".join(lines), payload, res
 
@@ -136,6 +141,13 @@ def run_supply_shock(supply_change_mbd: float, benchmark: str = "brent", horizon
             "upper": _series_payload(sc.upper),
             "methods": {"База (без шока)": _series_payload(sc.baseline),
                         **{f"Сценарий: {k}": _series_payload(v) for k, v in sc.paths.items() if k != "центральный"}},
+        },
+        "assumptions": {
+            "supply_change_mbd": supply_change_mbd, "effective_shock_mbd": round(sc.effective_shock_mbd, 3),
+            "shock_share_pct": round(sc.shock_share * 100, 2), "offset_share": offset_share,
+            "phase_in_months": phase_in_months, "global_supply_mbd": s.global_supply_mbd,
+            "price_impact_pct": {k: round(v, 1) for k, v in sc.price_impact_pct.items()},
+            "elasticity_sum": sc.assumptions["elasticity_sum"],
         },
     }
     return "\n".join(lines), payload, sc

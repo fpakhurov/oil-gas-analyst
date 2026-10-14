@@ -70,3 +70,15 @@ def test_phase_in(result):
     sc = supply_shock(result, -1.0, phase_in_months=3)
     ratio = (sc.paths["центральный"] / sc.baseline).values
     assert ratio[0] < ratio[1] < ratio[2]
+
+
+def test_current_month_is_excluded_from_monthly_series():
+    from datetime import date
+
+    from oilgas_analyst.forecasting.data import _to_monthly
+
+    days = pd.bdate_range("2026-08-01", "2026-10-14")
+    daily = pd.Series(range(len(days)), index=days, dtype=float)
+    assert _to_monthly(daily, today=date(2026, 10, 14)).index[-1] == pd.Timestamp("2026-09-01")
+    # исторический ряд (CSV-снимок) — последний месяц не текущий, остаётся
+    assert _to_monthly(daily, today=date(2026, 12, 1)).index[-1] == pd.Timestamp("2026-10-01")

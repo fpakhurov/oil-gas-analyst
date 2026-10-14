@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 16000
     # Server-side fallback на другую модель при отказе классификатора безопасности
     llm_refusal_fallback: bool = True
+    # Автоматический prompt caching: системный промпт, инструменты и история диалога
+    # переиспользуются между шагами агента и ходами диалога (дешевле и быстрее)
+    llm_prompt_caching: bool = True
+    # Жёсткий дневной лимит расходов на LLM, $ (0 — без лимита)
+    daily_budget_usd: float = 10.0
 
     # --- RAG ---
     # Корень данных; reports/chroma/prices по умолчанию лежат внутри него.
@@ -54,10 +59,26 @@ class Settings(BaseSettings):
     # Мировое предложение жидких УВ, млн б/с — база для сценарного модуля
     global_supply_mbd: float = 104.0
 
+    # --- Хранилище приложения ---
+    # SQLite: история диалогов (LangGraph checkpointer) и учёт расходов/метаданные
+    checkpoints_db: Path | None = None
+    app_db: Path | None = None
+    # Автообновление базы отчётов и снимка цен, дней (0 — выключено)
+    refresh_interval_days: int = 7
+
+    # --- Трейсинг (Langfuse, self-hosted) ---
+    langfuse_enabled: bool = False
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    # Адрес для SDK (в docker-compose — http://langfuse-web:3000) и для ссылок в UI
+    langfuse_base_url: str = "http://localhost:3000"
+    langfuse_ui_url: str = "http://localhost:3000"
+    langfuse_project_id: str = "oilgas-analyst"
+
     @model_validator(mode="after")
     def _derive_paths(self):
         # Плейсхолдеры из .env.example (sk-ant-..., tvly-...) — это «ключ не задан»
-        for key in ("anthropic_api_key", "tavily_api_key"):
+        for key in ("anthropic_api_key", "tavily_api_key", "langfuse_public_key", "langfuse_secret_key"):
             value = getattr(self, key)
             if not value or value.endswith("...") or value.strip() in ("", "changeme"):
                 setattr(self, key, None)
@@ -65,7 +86,13 @@ class Settings(BaseSettings):
         self.reports_dir = Path(self.reports_dir or self.data_dir / "reports")
         self.chroma_dir = Path(self.chroma_dir or self.data_dir / "chroma")
         self.prices_dir = Path(self.prices_dir or self.data_dir / "prices")
+        self.checkpoints_db = Path(self.checkpoints_db or self.data_dir / "checkpoints.sqlite")
+        self.app_db = Path(self.app_db or self.data_dir / "app.sqlite")
         return self
+
+    @property
+    def tracing_enabled(self) -> bool:
+        return bool(self.langfuse_enabled and self.langfuse_public_key and self.langfuse_secret_key)
 
 
 @lru_cache

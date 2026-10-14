@@ -1,4 +1,4 @@
-"""CLI: oilgas ingest | ask | chat | forecast | scenario | download-reports."""
+"""CLI: oilgas ingest | ask | chat | forecast | scenario | download-reports | refresh | usage."""
 
 from __future__ import annotations
 
@@ -14,6 +14,13 @@ def _print_turn(turn) -> None:
     if turn.tool_calls:
         print("\n— вызовы инструментов: " + ", ".join(f"{t['name']}({json.dumps(t['args'], ensure_ascii=False)})"
                                                  for t in turn.tool_calls))
+    if turn.verification:
+        c, n = turn.verification["citations"], turn.verification["numbers"]
+        print(f"— проверка: цитаты {c['verified']}/{c['total']}, числа {n['grounded']}/{n['total']}")
+    if turn.usage:
+        u = turn.usage
+        print(f"— {turn.model}: ${u['cost_usd']:.4f}, токены вход {u['input_tokens']} (кэш {u['cache_read']}) / "
+              f"выход {u['output_tokens']}, {turn.duration_s} с" + (f", трейс: {turn.trace_url}" if turn.trace_url else ""))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,6 +35,11 @@ def main(argv: list[str] | None = None) -> int:
     dl.add_argument("--months", type=int, default=3)
 
     sub.add_parser("snapshot-prices", help="сохранить историю цен в data/prices (офлайн-резерв)")
+
+    rf = sub.add_parser("refresh", help="обновить базу: новые отчёты + переиндексация + снимок цен")
+    rf.add_argument("--months", type=int, default=2)
+
+    sub.add_parser("usage", help="расходы на LLM за сегодня и последние диалоги")
 
     a = sub.add_parser("ask", help="задать один вопрос")
     a.add_argument("question")
@@ -61,6 +73,20 @@ def main(argv: list[str] | None = None) -> int:
         from oilgas_analyst.forecasting.data import save_snapshot
 
         print(json.dumps(save_snapshot(), ensure_ascii=False, indent=2))
+    elif args.cmd == "refresh":
+        from oilgas_analyst.refresh import refresh_knowledge_base
+
+        print(json.dumps(refresh_knowledge_base(months=args.months), ensure_ascii=False, indent=2))
+    elif args.cmd == "usage":
+        from oilgas_analyst.config import get_settings
+        from oilgas_analyst.storage import get_store
+
+        s = get_settings()
+        store = get_store(s)
+        limit = f"${s.daily_budget_usd:.2f}" if s.daily_budget_usd > 0 else "без лимита"
+        print(f"Сегодня (UTC): ${store.spent_today():.4f} из {limit}")
+        for t in store.list_threads(10):
+            print(f"  {t['updated_at']}  {t['model']:<18} {t['title'][:70]}")
     elif args.cmd == "forecast":
         from oilgas_analyst.forecasting.service import run_forecast
 

@@ -26,6 +26,14 @@ KNOWN_PUBLISHERS = {
 }
 
 
+def human_date(date: str | None) -> str:
+    """'2026-10' → 'октябрь 2026'."""
+    m = re.match(r"(\d{4})-(\d{2})", date or "")
+    if not m:
+        return date or "дата не указана"
+    return f"{RU_MONTHS[int(m.group(2))]} {m.group(1)}"
+
+
 @dataclass
 class ReportMeta:
     file: str
@@ -37,10 +45,7 @@ class ReportMeta:
 
     @property
     def human_date(self) -> str:
-        m = re.match(r"(\d{4})-(\d{2})", self.date or "")
-        if not m:
-            return self.date or "дата не указана"
-        return f"{RU_MONTHS[int(m.group(2))]} {m.group(1)}"
+        return human_date(self.date)
 
     def label(self, page: int | None = None) -> str:
         """Метка источника для ответа: [Отчёт EIA STEO, октябрь 2026, стр. 5]."""

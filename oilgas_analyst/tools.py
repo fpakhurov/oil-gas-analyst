@@ -8,7 +8,7 @@ from langchain_core.tools import tool
 
 from oilgas_analyst.config import get_settings
 from oilgas_analyst.forecasting.service import run_forecast, run_supply_shock
-from oilgas_analyst.rag.store import format_chunks, search_reports as _search_reports
+from oilgas_analyst.rag.store import chunk_sources, format_chunks, search_reports as _search_reports
 from oilgas_analyst.web.search import format_results, web_search as _web_search
 
 
@@ -24,9 +24,8 @@ def search_reports(query: str, publisher: Literal["OPEC", "EIA", "IEA"] | None =
     """
     s = get_settings()
     chunks = _search_reports(query, k=k, publisher=publisher)
-    sources = [{"label": c.label, "score": c.score, "file": c.metadata.get("source_file"),
-                "page": c.metadata.get("page")} for c in chunks]
-    return format_chunks(chunks, s.rag_relevance_threshold), {"kind": "rag", "sources": sources}
+    return format_chunks(chunks, s.rag_relevance_threshold), {"kind": "rag", "query": query,
+                                                              "sources": chunk_sources(chunks)}
 
 
 @tool(response_format="content_and_artifact")
@@ -40,9 +39,10 @@ def web_search(query: str, topic: Literal["news", "general"] = "news", days: int
         days: глубина поиска новостей в днях (по умолчанию 30).
     """
     results, stats = _web_search(query, topic=topic, days=days)
-    sources = [{"label": r.label(), "url": r.url, "title": r.title, "tier": r.tier_label} for r in results]
-    return format_results(results, stats), {"kind": "web", "sources": sources, "dropped": stats["dropped"],
-                                             "provider": stats["provider"]}
+    sources = [{"label": r.label(), "name": r.source_name, "url": r.url, "title": r.title, "tier": r.tier_label,
+                "published": r.published, "snippet": r.snippet} for r in results]
+    return format_results(results, stats), {"kind": "web", "query": query, "sources": sources,
+                                             "dropped": stats["dropped"], "provider": stats["provider"]}
 
 
 @tool(response_format="content_and_artifact")

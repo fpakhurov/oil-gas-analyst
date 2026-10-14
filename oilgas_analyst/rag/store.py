@@ -165,6 +165,16 @@ def _signature(chunk: RetrievedChunk) -> str:
     return f"{chunk.metadata.get('publisher')}|{text[:160]}"
 
 
+def chunk_sources(chunks: list[RetrievedChunk], text_chars: int = 1500) -> list[dict]:
+    """Описание найденных фрагментов для UI и проверки цитат (в LLM не отправляется)."""
+    from oilgas_analyst.rag.catalog import human_date
+
+    return [{"label": c.label, "score": c.score, "file": c.metadata.get("source_file"),
+             "page": c.metadata.get("page"), "report_short": c.metadata.get("report_short", ""),
+             "date_human": human_date(c.metadata.get("report_date")), "text": c.text[:text_chars]}
+            for c in chunks]
+
+
 def format_chunks(chunks: list[RetrievedChunk], threshold: float) -> str:
     if not chunks:
         return "База отчётов пуста или ничего не найдено."

@@ -83,11 +83,11 @@ def _from_csv(benchmark: str, settings: Settings) -> pd.Series:
     return df.set_index("date")["price"].astype(float)
 
 
-def _to_monthly(daily: pd.Series) -> pd.Series:
+def _to_monthly(daily: pd.Series, today: date | None = None) -> pd.Series:
     monthly = daily.resample("MS").mean().dropna()
-    # Текущий неполный месяц выкидываем, если в нём меньше 10 торговых дней
-    last_month = daily.index[-1].to_period("M")
-    if (daily.index.to_period("M") == last_month).sum() < 10:
+    # Текущий месяц ещё идёт: его среднее по части дней смещает ряд — модели строим по полным месяцам
+    today = today or date.today()
+    if daily.index[-1].to_period("M") == pd.Period(today, "M"):
         monthly = monthly.iloc[:-1]
     monthly.index.freq = "MS"
     return monthly
