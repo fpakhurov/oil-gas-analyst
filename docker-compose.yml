@@ -1,0 +1,14 @@
+services:
+  analyst:
+    build: .
+    image: oilgas-analyst:latest
+    env_file: .env
+    ports:
+      - "8501:8501"
+    volumes:
+      # Индекс Chroma и добавленные через UI отчёты переживают пересоздание контейнера
+      - analyst-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  analyst-data:

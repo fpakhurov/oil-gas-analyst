@@ -1,0 +1,43 @@
+[project]
+name = "oilgas-analyst"
+version = "0.1.0"
+description = "AI-агент «Нефтегазовый аналитик»: RAG по отраслевым отчётам + веб-поиск + прогноз цен на нефть (LangGraph + Claude)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "langgraph>=0.6",
+    "langchain-core>=0.3",
+    "langchain-anthropic>=0.3",
+    "langchain-chroma>=0.2",
+    "langchain-text-splitters>=0.3",
+    "chromadb>=0.5",
+    "sentence-transformers>=3.0",
+    "pypdf>=5.0",
+    "yfinance>=0.2.50",
+    "statsmodels>=0.14",
+    "pandas>=2.0",
+    "numpy>=1.26",
+    "requests>=2.31",
+    "tavily-python>=0.5",
+    "ddgs>=9.0",
+    "pydantic-settings>=2.4",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+ui = ["streamlit>=1.38", "plotly>=5.22"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+oilgas = "oilgas_analyst.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["oilgas_analyst*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["network: tests that need internet access", "llm: tests that call the LLM API"]

@@ -1,0 +1,36 @@
+{
+  "reports": [
+    {
+      "file": "eia_steo_2026-08.pdf",
+      "publisher": "EIA",
+      "title": "Short-Term Energy Outlook (STEO)",
+      "short_name": "EIA STEO",
+      "date": "2026-08",
+      "url": "https://www.eia.gov/outlooks/steo/archives/aug26.pdf"
+    },
+    {
+      "file": "eia_steo_2026-09.pdf",
+      "publisher": "EIA",
+      "title": "Short-Term Energy Outlook (STEO)",
+      "short_name": "EIA STEO",
+      "date": "2026-09",
+      "url": "https://www.eia.gov/outlooks/steo/archives/sep26.pdf"
+    },
+    {
+      "file": "eia_steo_2026-10.pdf",
+      "publisher": "EIA",
+      "title": "Short-Term Energy Outlook (STEO)",
+      "short_name": "EIA STEO",
+      "date": "2026-10",
+      "url": "https://www.eia.gov/outlooks/steo/archives/oct26.pdf"
+    },
+    {
+      "file": "opec_momr_2025-10.pdf",
+      "publisher": "OPEC",
+      "title": "Monthly Oil Market Report (MOMR)",
+      "short_name": "OPEC MOMR",
+      "date": "2025-10",
+      "url": "https://static.poder360.com.br/2025/10/relatorio-opep-outubro.pdf"
+    }
+  ]
+}
