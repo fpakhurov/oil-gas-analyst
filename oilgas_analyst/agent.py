@@ -27,6 +27,7 @@ import sqlite3
 import time
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from functools import lru_cache
@@ -43,6 +44,7 @@ from oilgas_analyst.prompts import RAG_CONTEXT_HEADER, SYSTEM_PROMPT
 from oilgas_analyst.rag.store import chunk_sources, format_chunks, search_reports
 from oilgas_analyst.storage import get_store
 from oilgas_analyst.tools import ALL_TOOLS
+from oilgas_analyst.translate import translate_reasoning
 from oilgas_analyst.verification import Evidence, verify_answer
 
 log = logging.getLogger(__name__)
@@ -190,7 +192,8 @@ class AgentTurn:
     artifacts: list[dict] = field(default_factory=list)  # артефакты инструментов (источники, графики)
     report_sources: list[dict] = field(default_factory=list)  # результаты автопоиска по базе
     steps: list[dict] = field(default_factory=list)  # путь решения: шаги графа по порядку
-    reasoning: list[str] = field(default_factory=list)  # резюме рассуждений Claude (thinking summary)
+    reasoning: list[str] = field(default_factory=list)  # резюме рассуждений Claude на языке вопроса
+    reasoning_original: list[str] = field(default_factory=list)  # как вернул API (обычно по-английски)
     verification: dict = field(default_factory=dict)
     usage: dict = field(default_factory=dict)
     trace_url: str | None = None
@@ -221,6 +224,8 @@ class OilGasAnalyst:
         self.settings = settings or get_settings()
         self.store = get_store(self.settings)
         self.graph = build_graph(self.settings, checkpointer)
+        # Перевод резюме рассуждений идёт параллельно ходу и не тормозит граф
+        self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="reasoning-translate")
 
     def ask(self, question: str, thread_id: str | None = None) -> AgentTurn:
         turn = None
@@ -230,7 +235,7 @@ class OilGasAnalyst:
         return turn
 
     def stream(self, question: str, thread_id: str | None = None) -> Iterator[dict]:
-        """События хода для UI: step | token | thinking | final(turn)."""
+        """События хода для UI: step | token | thinking | reasoning (перевод резюме) | final(turn)."""
         s = self.settings
         thread_id = thread_id or str(uuid.uuid4())
         callbacks = obs.tracing_callbacks(s)
@@ -244,6 +249,20 @@ class OilGasAnalyst:
         before = len(self.graph.get_state(config).values.get("messages", []))
         self.store.upsert_thread(thread_id, question, s.llm_model)
         started = time.monotonic()
+        segments: list[str] = []
+        futures: dict[int, Future] = {}
+        emitted: set[int] = set()
+
+        def ready_translations(wait: bool = False) -> Iterator[dict]:
+            for i, fut in sorted(futures.items()):
+                if i in emitted or not (wait or fut.done()):
+                    continue
+                try:
+                    text, _ = fut.result(timeout=60)
+                except Exception:
+                    text = segments[i]
+                emitted.add(i)
+                yield {"type": "reasoning", "index": i, "text": text}
 
         for mode, chunk in self.graph.stream({"messages": [HumanMessage(question)]}, config,
                                              stream_mode=["updates", "messages"]):
@@ -253,12 +272,35 @@ class OilGasAnalyst:
                     for kind in ("text", "thinking"):
                         for piece in _stream_pieces(msg, kind):
                             yield {"type": "token" if kind == "text" else "thinking", "text": piece}
-                continue
-            for node, update in (chunk or {}).items():
-                yield from self._step_events(node, update or {})
+            else:
+                for node, update in (chunk or {}).items():
+                    if node == "agent":
+                        for m in (update or {}).get("messages", []):
+                            for seg in _block_texts(m, "thinking") if isinstance(m, AIMessage) else []:
+                                futures[len(segments)] = self._pool.submit(
+                                    translate_reasoning, question, seg, s, self.store, thread_id)
+                                segments.append(seg)
+                    yield from self._step_events(node, update or {})
+            yield from ready_translations()
+        yield from ready_translations(wait=True)
 
         state = self.graph.get_state(config).values
         turn = self._collect(state["messages"][before:], state.get("verification") or {})
+        if len(turn.reasoning) == len(segments):
+            translated, extra = [], obs.Usage()
+            for i, seg in enumerate(segments):
+                try:
+                    text, u = futures[i].result(timeout=60)
+                except Exception:
+                    text, u = seg, None
+                translated.append(text)
+                if u is not None:
+                    extra.add(u)
+            turn.reasoning_original, turn.reasoning = turn.reasoning, translated
+            if extra.calls:
+                usage = obs.Usage(**{k: v for k, v in turn.usage.items()})
+                usage.add(extra)
+                turn.usage = usage.to_dict()
         turn.trace_url = obs.trace_url(s, callbacks)
         turn.duration_s = round(time.monotonic() - started, 1)
         obs.flush(s)

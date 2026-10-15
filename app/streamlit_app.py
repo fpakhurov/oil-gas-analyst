@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 import uuid
 from datetime import datetime
 
@@ -16,6 +17,7 @@ from oilgas_analyst.rag.store import get_store as get_vector_store
 from oilgas_analyst.rag.store import indexed_files, ingest_reports
 from oilgas_analyst.refresh import last_refresh, refresh_knowledge_base, start_scheduler
 from oilgas_analyst.storage import get_store
+from oilgas_analyst.verification import cited_web_urls
 from oilgas_analyst.web.search import iso_date
 
 st.set_page_config(page_title="Нефтегазовый аналитик", page_icon="🛢️", layout="wide")
@@ -83,12 +85,12 @@ def render_chart(art: dict) -> None:
     fig.update_layout(height=360, margin=dict(l=10, r=10, t=30, b=10), yaxis_title="$/барр.",
                       title=f"{art['benchmark']}: {'прогноз' if art['kind'] == 'forecast' else 'сценарий шока предложения'}",
                       legend=dict(orientation="h", y=-0.2))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     if info := art.get("method_info"):
         st.caption("Модели ансамбля: вес — по ошибке скользящего бэктеста (MAPE)")
         st.dataframe([{"Модель": m["method"], "Спецификация": m["details"], "Вес": m["weight"],
                        "MAPE бэктеста": f"{m['backtest_mape'] * 100:.1f}%" if m["backtest_mape"] is not None else "—"}
-                      for m in info], hide_index=True, use_container_width=True)
+                      for m in info], hide_index=True, width="stretch")
     if a := art.get("assumptions"):
         st.caption(
             f"Допущения: шок {a['supply_change_mbd']:+} млн б/с, компенсация {a['offset_share']:.0%} → эффективно "
@@ -143,17 +145,50 @@ def render_evidence(turn: dict, key: str) -> None:
                         st.image(png, caption=f"{c['file']}, стр. {c['page']}")
                     else:
                         st.caption("PDF не найден в data/reports")
-    for art in turn.get("artifacts", []):
-        if art.get("kind") != "web":
-            continue
-        st.markdown(f"**Веб-поиск** «{art.get('query', '')}» — {art.get('provider', '')}")
-        for s in art.get("sources", []):
-            date = f", {iso_date(s['published']) or s['published']}" if s.get("published") else ""
-            st.markdown(f"- [{md(s['title'] or s['url'])}]({s['url']}) — {s.get('name', '')}{date} · _{s['tier']}_")
-        for d in art.get("dropped", []):
-            st.markdown(f"- ~~{d['url']}~~ — отсеяно: {d['reason']}")
+    render_web_sources(turn)
     if not chunks and not any(a.get("kind") == "web" for a in turn.get("artifacts", [])):
         st.caption("Источники не использовались.")
+
+
+TIER_ICON = {"официальный источник": "🟢", "надёжное СМИ": "🔵", "непроверенный источник": "⚪"}
+
+
+def _short_title(title: str, limit: int = 90) -> str:
+    # «Заголовок | Reuters» / «Заголовок - Site» — название издания и так в строке
+    title = re.split(r"\s+[|–—]\s+|\s+-\s+(?=[A-ZА-Я][^-]{0,40}$)", title or "")[0].strip()
+    return title if len(title) <= limit else title[: limit - 1].rstrip() + "…"
+
+
+def render_web_sources(turn: dict) -> None:
+    arts = [a for a in turn.get("artifacts", []) if a.get("kind") == "web"]
+    if not arts:
+        return
+    sources, seen = [], set()
+    for a in arts:
+        for src in a.get("sources", []):
+            if src["url"] not in seen:
+                seen.add(src["url"])
+                sources.append(src)
+    cited = cited_web_urls(turn.get("answer", ""), sources)
+    sources.sort(key=lambda x: (x["url"] not in cited, x.get("tier") != "официальный источник",
+                                x.get("tier") != "надёжное СМИ"))
+    queries = "; ".join(f"«{a.get('query', '')}»" for a in arts)
+    st.markdown(f"**Веб-источники** · {len(sources)} · 📌 — процитирован в ответе")
+    st.caption(f"Запросы: {md(queries)} · {arts[0].get('provider', '')} · "
+               "🟢 официальный · 🔵 надёжное СМИ · ⚪ непроверенный")
+    lines = []
+    for src in sources:
+        date = iso_date(src.get("published"))
+        date = f" · {date[8:10]}.{date[5:7]}" if date else ""
+        pin = "📌 " if src["url"] in cited else ""
+        title = md(_short_title(src.get("title") or src["url"])).replace("[", "(").replace("]", ")")
+        lines.append(f"{pin}{TIER_ICON.get(src.get('tier'), '⚪')} **{src.get('name', '')}**{date} — "
+                     f"[{title}]({src['url']})")
+    st.markdown("  \n".join(lines))
+    dropped = [d for a in arts for d in a.get("dropped", [])]
+    if dropped:
+        hosts = sorted({re.sub(r"^https?://(www\.)?", "", d["url"]).split("/")[0] for d in dropped})
+        st.caption("Отсеяно фильтром (жёлтая пресса, соцсети, кликбейт): " + ", ".join(hosts))
 
 
 def render_path(turn: dict) -> None:
@@ -182,7 +217,7 @@ def render_verification(turn: dict) -> None:
     items = v["citations"]["items"]
     if items:
         st.dataframe([{"": STATUS_ICON.get(i["status"], "?"), "Метка": i["raw"], "Результат": i["detail"]}
-                      for i in items], hide_index=True, use_container_width=True)
+                      for i in items], hide_index=True, width="stretch")
     n = v["numbers"]
     st.markdown(f"**Числа:** {n['grounded']} из {n['total']} найдены в текстах источников и выводе инструментов.")
     if n["ungrounded"]:
@@ -212,6 +247,11 @@ def render_turn(turn: dict, idx: int) -> None:
             for r in turn["reasoning"]:
                 st.markdown(f"> {md(r)}")
             st.caption("Краткое изложение рассуждений модели (thinking summary), а не полный ход мыслей.")
+            original = turn.get("reasoning_original") or []
+            if original and original != turn["reasoning"]:
+                with st.expander("Оригинал резюме (как вернул API)"):
+                    for r in original:
+                        st.markdown(f"> {md(r)}")
         else:
             st.caption("Резюме рассуждений нет.")
 
@@ -239,15 +279,15 @@ with st.sidebar:
         models[st.session_state.model] = st.session_state.model
     labels = list(models)
     current = next(i for i, m in enumerate(models.values()) if m == st.session_state.model)
-    picked = models[st.selectbox("Модель", labels, index=current,
-                                 help="Opus — глубже анализ; Sonnet — быстрее и вдвое дешевле. "
-                                      "Смена модели начинает новый диалог.")]
-    if picked != st.session_state.model:
-        st.session_state.model = picked
-        open_thread(None)
-        st.rerun()
+    # Модель можно менять посреди диалога: состояние диалога общее (SQLite-checkpointer), история
+    # append-only, а thinking-блоки другой модели API просто игнорирует. Кэш промпта у каждой
+    # модели свой — первый ответ после переключения дороже.
+    st.session_state.model = models[st.selectbox(
+        "Модель", labels, index=current,
+        help="Opus — глубже анализ; Sonnet — быстрее и вдвое дешевле. Переключать можно посреди "
+             "диалога: следующий ответ даст выбранная модель (первый после смены — без кэша, чуть дороже).")]
 
-    if st.button("➕ Новый диалог", use_container_width=True):
+    if st.button("➕ Новый диалог", width="stretch"):
         open_thread(None)
         st.rerun()
 
@@ -257,7 +297,7 @@ with st.sidebar:
         for t in threads:
             mark = "▸ " if t["thread_id"] == st.session_state.thread_id else ""
             label = f"{mark}{t['title'][:42]}{'…' if len(t['title']) > 42 else ''}"
-            if st.button(label, key=f"th-{t['thread_id']}", use_container_width=True,
+            if st.button(label, key=f"th-{t['thread_id']}", width="stretch",
                          help=f"{t['updated_at'][:16].replace('T', ' ')} UTC · {t['model']}"):
                 open_thread(t["thread_id"])
                 st.rerun()
@@ -291,13 +331,13 @@ with st.sidebar:
     when = datetime.fromisoformat(lr["at"]).strftime("%d.%m.%Y %H:%M") + " UTC" if lr else "ещё не было"
     st.caption(f"Автообновление раз в {settings.refresh_interval_days} дн. · последнее: {when}"
                if settings.refresh_interval_days > 0 else f"Автообновление выключено · последнее: {when}")
-    if st.button("🔄 Обновить базу сейчас", use_container_width=True):
+    if st.button("🔄 Обновить базу сейчас", width="stretch"):
         with st.spinner("Скачиваю новые выпуски, индексирую, обновляю цены…"):
             res = refresh_knowledge_base(settings)
         new = res.get("ingest", {}).get("indexed", [])
         st.success(f"Новых отчётов: {len(new)}" + (f" ({', '.join(new)})" if new else ""))
     uploaded = st.file_uploader("Добавить PDF-отчёт", type=["pdf"], accept_multiple_files=True)
-    if uploaded and st.button("Проиндексировать загруженные", use_container_width=True):
+    if uploaded and st.button("Проиндексировать загруженные", width="stretch"):
         settings.reports_dir.mkdir(parents=True, exist_ok=True)
         for up in uploaded:
             (settings.reports_dir / up.name).write_bytes(up.getvalue())
@@ -307,58 +347,118 @@ with st.sidebar:
         st.rerun()
 
 # --- чат -------------------------------------------------------------------------
+#
+# Раскладка устроена так, чтобы во время генерации не «просвечивали» элементы прошлого прогона.
+# Streamlit оставляет на экране (полупрозрачными) элементы предыдущего прогона, которые текущий
+# прогон ещё не перезаписал, и переиспользует контейнеры на тех же позициях вместе с их детьми.
+# Поэтому всё, что может исчезнуть или сдвинуться (примеры, живой ход), живёт в st.empty():
+# вызов st.empty() сбрасывает прошлое содержимое на своей позиции целиком.
+
+TOOL_STAGE = {
+    "search_reports": "📚 Уточняю поиск по отчётам",
+    "web_search": "🌐 Ищу в интернете",
+    "forecast_oil_price": "📈 Считаю прогноз цены",
+    "supply_shock_scenario": "🧮 Считаю сценарий",
+}
+
+# chat_input закреплён внизу страницы, где бы его ни вызвали, — читаем вопрос до отрисовки,
+# чтобы на время генерации сразу убрать примеры
+question = st.chat_input("Спросите о рынке нефти и газа…") or st.session_state.pop("pending", None)
 
 if not settings.anthropic_api_key:
     st.error("Не задан ANTHROPIC_API_KEY — укажите его в .env")
 
-if not st.session_state.history:
-    st.markdown("#### Примеры запросов")
-    cols = st.columns(2)
-    for i, ex in enumerate(EXAMPLES):
-        if cols[i % 2].button(ex, key=f"ex{i}", use_container_width=True):
-            st.session_state.pending = ex
-            st.rerun()
+examples_slot = st.empty()
+history_area = st.container()
+live_slot = st.empty()
 
-for i, turn in enumerate(st.session_state.history):
-    with st.chat_message("user"):
-        st.markdown(turn["question"])
-    with st.chat_message("assistant", avatar="🛢️"):
-        render_turn(turn, i)
+if not st.session_state.history and not question:
+    with examples_slot.container():
+        st.markdown("#### Примеры запросов")
+        cols = st.columns(2)
+        for i, ex in enumerate(EXAMPLES):
+            if cols[i % 2].button(ex, key=f"ex{i}", width="stretch"):
+                st.session_state.pending = ex
+                st.rerun()
 
-question = st.chat_input("Спросите о рынке нефти и газа…") or st.session_state.pop("pending", None)
-if question:
-    with st.chat_message("user"):
-        st.markdown(question)
-    with st.chat_message("assistant", avatar="🛢️"):
-        status = st.status("Анализирую: отчёты → веб → расчёты…", expanded=True)
-        thought = status.empty()
-        answer_box = st.empty()
-        buffer, thinking, final = "", "", None
-        try:
-            for event in get_analyst(st.session_state.model).stream(question, st.session_state.thread_id):
-                if event["type"] == "token":
-                    buffer += event["text"]
-                    answer_box.markdown(md(buffer) + "▌")
-                elif event["type"] == "thinking":
-                    thinking += event["text"]
-                    thought.caption("💭 " + md(thinking[-280:].replace("\n", " ")))
-                elif event["type"] == "step":
-                    if event["node"] == "agent" and buffer.strip():
-                        status.markdown(f"💬 _{md(buffer.strip())}_")  # реплика модели перед вызовом инструмента
-                        buffer = ""
-                        answer_box.empty()
-                    thinking = ""
-                    thought.empty()
-                    status.write(md(event["text"]))
-                elif event["type"] == "final":
-                    final = event["turn"].to_payload()
-            status.update(label="Готово" + (f" за {final['duration_s']:.0f} с" if final else ""),
-                          state="complete", expanded=False)
-        except Exception as e:
-            status.update(label="Ошибка", state="error")
-            final = {"answer": f"⚠️ Ошибка: {type(e).__name__}: {e}"}
-        thought.empty()
+with history_area:
+    for i, turn in enumerate(st.session_state.history):
+        with st.chat_message("user"):
+            st.markdown(turn["question"])
+        with st.chat_message("assistant", avatar="🛢️"):
+            render_turn(turn, i)
+
+
+def stream_turn(question: str) -> dict:
+    """Живой ход: свёрнутый статус с текущим этапом в заголовке, ниже — ответ по мере генерации."""
+    status = st.status("🔎 Ищу в базе отчётов…", expanded=False)
+    with status:
+        log = st.container()  # полный лог шагов и рассуждений — по желанию раскрыть
+    answer_box = st.empty()
+    buffer, stage, tools_batch = "", "", []
+
+    def set_stage(label: str) -> None:
+        nonlocal stage
+        if label != stage:
+            stage = label
+            status.update(label=label)
+
+    try:
+        for event in get_analyst(st.session_state.model).stream(question, st.session_state.thread_id):
+            kind = event["type"]
+            if kind == "token":
+                tools_batch = []
+                buffer += event["text"]
+                answer_box.markdown(md(buffer) + "▌")
+                set_stage("✍️ Пишу ответ…")
+            elif kind == "thinking":
+                # Сырой поток резюме API — по-английски; показываем уже переведённые фрагменты (reasoning)
+                if not stage.startswith(("💭", "✍️")):
+                    set_stage("💭 Размышляю…")
+            elif kind == "reasoning":
+                log.caption("💭 " + md(event["text"].replace("\n", " ")))
+            elif kind == "step":
+                node = event["node"]
+                if node == "agent" and buffer.strip():
+                    log.markdown(f"💬 _{md(buffer.strip())}_")  # реплика модели перед вызовом инструментов
+                    buffer = ""
+                    answer_box.empty()
+                log.write(md(event["text"]))
+                if node == "retrieve_reports":
+                    set_stage("💭 Изучаю найденное в отчётах…")
+                elif node == "agent" and event.get("tool"):
+                    tools_batch.append(event)
+                    if len(tools_batch) == 1:
+                        set_stage(md(event["text"]) + "…")
+                    else:
+                        names = dict.fromkeys(TOOL_STAGE.get(e["tool"], e["tool"]) for e in tools_batch)
+                        set_stage(f"🛠 Параллельно: {', '.join(n.split(' ', 1)[1].lower() for n in names)}…")
+                elif node == "tools":
+                    tools_batch = []
+                    set_stage("💭 Анализирую результаты…")
+                elif node == "verify":
+                    set_stage("✅ " + md(event["text"]))
+            elif kind == "final":
+                final = event["turn"].to_payload()
+                v = final.get("verification") or {}
+                done = f"Готово за {final['duration_s']:.0f} с"
+                if v:
+                    done += f" · цитаты {v['citations']['verified']}/{v['citations']['total']}"
+                status.update(label=done, state="complete", expanded=False)
+                answer_box.empty()
+                return final
+    except Exception as e:
+        status.update(label="Ошибка", state="error")
         answer_box.empty()
-        turn = {"question": question, **(final or {"answer": "⚠️ Пустой ответ"})}
-        render_turn(turn, len(st.session_state.history))
+        return {"answer": f"⚠️ Ошибка: {type(e).__name__}: {e}"}
+    return {"answer": "⚠️ Пустой ответ"}
+
+
+if question:
+    with live_slot.container():
+        with st.chat_message("user"):
+            st.markdown(question)
+        with st.chat_message("assistant", avatar="🛢️"):
+            turn = {"question": question, **stream_turn(question)}
+            render_turn(turn, len(st.session_state.history))
     st.session_state.history.append(turn)

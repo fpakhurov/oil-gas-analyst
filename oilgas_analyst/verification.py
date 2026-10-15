@@ -120,7 +120,7 @@ def source_aliases(answer: str) -> dict[str, str]:
     return aliases
 
 
-def _web_matches(name: str, sources: list[dict], aliases: dict[str, str] | None = None) -> bool:
+def web_matches(name: str, sources: list[dict], aliases: dict[str, str] | None = None) -> bool:
     cited = _norm(name)
     parts = [_key(p) for p in re.split(r"\s*/\s*|\s+со ссылкой на\s+|\s*\(|\)", cited)]
     parts = [p for p in parts if len(p) > 1]
@@ -156,7 +156,7 @@ def verify_citations(answer: str, ev: Evidence) -> dict:
                 status = "ok" if not missing else "page_not_retrieved"
                 detail = "страницы найдены" if not missing else f"нет среди найденных фрагментов: стр. {', '.join(map(str, missing))}"
         elif c["kind"] == "web":
-            ok = _web_matches(c["name"], ev.web_sources, aliases)
+            ok = web_matches(c["name"], ev.web_sources, aliases)
             status, detail = ("ok", "источник есть в веб-выдаче") if ok else ("not_found", "источника нет в веб-выдаче")
         else:
             ok = bool(ev.tool_names & CALC_TOOLS)
@@ -217,6 +217,13 @@ def verify_numbers(answer: str, ev: Evidence, max_examples: int = 12) -> dict:
                 ctx = re.sub(r"\s+", " ", _BRACKET_RE.sub("", line)).strip(" -*|#")
                 ungrounded.append({"value": m.group(), "context": ctx[:220]})
     return {"total": total, "grounded": grounded, "ungrounded": ungrounded}
+
+
+def cited_web_urls(answer: str, sources: list[dict]) -> set[str]:
+    """URL веб-источников, на которые ответ ссылается метками [Источник: …, web] (для UI)."""
+    aliases = source_aliases(answer)
+    names = [c["name"] for c in parse_citations(answer) if c["kind"] == "web"]
+    return {s["url"] for s in sources if s.get("url") and any(web_matches(n, [s], aliases) for n in names)}
 
 
 def verify_answer(answer: str, ev: Evidence) -> dict:

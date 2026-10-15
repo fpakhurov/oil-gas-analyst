@@ -16,6 +16,7 @@ COPY oilgas_analyst ./oilgas_analyst
 RUN pip install ".[ui]"
 
 COPY app ./app
+COPY .streamlit ./.streamlit
 COPY docker/entrypoint.sh /entrypoint.sh
 # Отчёты и снимок цен из репозитория (если есть) — базовый корпус для офлайн-старта
 COPY data/reports ./data/reports

@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     llm_prompt_caching: bool = True
     # Жёсткий дневной лимит расходов на LLM, $ (0 — без лимита)
     daily_budget_usd: float = 10.0
+    # Вспомогательная дешёвая модель (перевод резюме рассуждений на язык вопроса)
+    aux_model: str = "claude-haiku-5-5"
+    reasoning_translation: bool = True
 
     # --- RAG ---
     # Корень данных; reports/chroma/prices по умолчанию лежат внутри него.

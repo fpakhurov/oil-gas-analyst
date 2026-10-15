@@ -141,3 +141,37 @@ def test_collect_reasoning_and_usage(settings):
     assert turn.answer == "Ответ" and turn.reasoning == ["Сначала отчёты, потом веб"]
     assert turn.tool_calls == [{"name": "web_search", "args": {"query": "q"}}]
     assert turn.steps[0] == {"kind": "reports_auto", "found": 1, "relevant": 1, "best": "[Отчёт X]"}
+
+
+def test_reasoning_translated_async_and_cost_added(monkeypatch, settings):
+    """Резюме рассуждений переводится на язык вопроса в фоне; оригинал сохраняется, стоимость учитывается."""
+    from oilgas_analyst.observability import Usage
+
+    def fake_translate(question, text, s, store=None, thread_id=None):
+        return f"[ru] {text}", Usage(input_tokens=100, output_tokens=50, cost_usd=0.001, calls=1)
+
+    monkeypatch.setattr(agent_mod, "translate_reasoning", fake_translate)
+    _scripted(monkeypatch, [AIMessage([{"type": "thinking", "thinking": "Check the reports first"},
+                                       {"type": "text", "text": "Ответ без цитат"}])])
+    events = list(OilGasAnalyst(settings, InMemorySaver()).stream("Что с Brent?", "t3"))
+    turn = events[-1]["turn"]
+    assert [e["text"] for e in events if e["type"] == "reasoning"] == ["[ru] Check the reports first"]
+    assert turn.reasoning == ["[ru] Check the reports first"]
+    assert turn.reasoning_original == ["Check the reports first"]
+    # вызов модели (без usage в тестовом сообщении) + вызов перевода
+    assert turn.usage["cost_usd"] == pytest.approx(0.001) and turn.usage["calls"] == 2
+
+
+def test_needs_translation():
+    from oilgas_analyst.translate import needs_translation
+
+    assert needs_translation("Что с ценой Brent?", "Looking at the EIA forecast for Brent")
+    assert not needs_translation("What about Brent?", "Looking at the EIA forecast")
+    assert not needs_translation("Что с ценой Brent?", "Смотрю прогноз EIA по Brent")
+
+
+def test_translation_prompt_names_target_language():
+    from oilgas_analyst.translate import _system_prompt
+
+    assert "на русский язык" in _system_prompt("Что с ценой Brent?")
+    assert "language of this question" in _system_prompt("Wie hoch ist der Brent-Preis?")

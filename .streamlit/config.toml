@@ -1,0 +1,12 @@
+# Режим эксплуатации: без вотчера исходников (он ещё и спотыкается о ленивые модули transformers),
+# без телеметрии, только локальный доступ.
+[server]
+headless = true
+address = "127.0.0.1"
+port = 8501
+fileWatcherType = "none"
+runOnSave = false
+
+[browser]
+gatherUsageStats = false
+serverAddress = "127.0.0.1"

@@ -12,6 +12,9 @@ from oilgas_analyst.web.source_filter import assess, blocked_domains
 log = logging.getLogger(__name__)
 
 
+WEB_TIMEOUT_S = 20
+
+
 @dataclass
 class WebResult:
     title: str
@@ -30,8 +33,9 @@ class WebResult:
 def _tavily(query: str, max_results: int, topic: str, days: int | None, api_key: str) -> list[dict]:
     from tavily import TavilyClient
 
+    # Таймаут клиента по умолчанию — 60 с; для интерактивного ответа лучше быстро уйти на DuckDuckGo
     kwargs = dict(query=query, max_results=max_results, topic=topic, search_depth="advanced",
-                  exclude_domains=blocked_domains()[:150])
+                  exclude_domains=blocked_domains()[:150], timeout=WEB_TIMEOUT_S)
     if topic == "news" and days:
         kwargs["days"] = days
     resp = TavilyClient(api_key=api_key).search(**kwargs)

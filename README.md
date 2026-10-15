@@ -47,8 +47,11 @@ pip install -e '.[ui,dev]'
 cp .env.example .env                 # ключи
 oilgas download-reports --months 3   # EIA STEO за 3 месяца (+ OPEC MOMR, если доступен)
 oilgas ingest                        # чанкинг + эмбеддинги + Chroma
-streamlit run app/streamlit_app.py   # UI
+streamlit run app/streamlit_app.py   # UI → http://127.0.0.1:8501
 ```
+Настройки сервера — в [`.streamlit/config.toml`](.streamlit/config.toml): только `127.0.0.1`, без вотчера
+исходников и телеметрии. Открывайте по IP: сервер слушает IPv4, а Safari для `localhost` может
+сначала пробовать IPv6.
 
 CLI без UI:
 ```bash
@@ -90,27 +93,26 @@ Claude отвечает только за рассуждение и выбор �
 
 ```mermaid
 flowchart LR
-    U[Пользователь<br/>Streamlit / CLI] --> G
+    U["Пользователь: Streamlit / CLI"] --> R
 
-    subgraph G[LangGraph]
-        direction LR
-        R[retrieve_reports<br/>автопоиск по базе:<br/>шаг 1 приоритизации] --> A[agent<br/>Claude + tools<br/>бюджет · учёт $]
-        A -- tool_calls --> T[ToolNode]
+    subgraph graph_box["LangGraph"]
+        R["retrieve_reports<br/>автопоиск по базе<br/>(шаг 1 приоритизации)"] --> A["agent<br/>Claude + инструменты<br/>бюджет, учёт стоимости"]
+        A -->|"tool_calls"| T["ToolNode"]
         T --> A
-        A -- ответ --> VF[verify<br/>сверка цитат<br/>и чисел]
+        A -->|"ответ"| VF["verify<br/>сверка цитат и чисел"]
     end
-    G -. трейсы .-> LF[(Langfuse)]
-    G -. история .-> DB[(SQLite:<br/>checkpoints, расходы)]
 
-    R -. top-k .-> V[(Chroma<br/>multilingual-e5)]
-    T --> S1[search_reports<br/>уточняющий RAG]
-    T --> S2[web_search<br/>Tavily → DDG<br/>+ фильтр жёлтой прессы]
-    T --> S3[forecast_oil_price<br/>SARIMA + ETS + ансамбль]
-    T --> S4[supply_shock_scenario<br/>эластичности ±N млн б/с]
+    A -.->|"трейсы"| LF[("Langfuse")]
+    A -.->|"история, расходы"| DB[("SQLite")]
+    R -.->|"top-k"| V[("Chroma<br/>multilingual-e5")]
+    T --> S1["search_reports<br/>уточняющий RAG"]
+    T --> S2["web_search<br/>Tavily или DuckDuckGo<br/>фильтр жёлтой прессы"]
+    T --> S3["forecast_oil_price<br/>SARIMA + ETS, ансамбль"]
+    T --> S4["supply_shock_scenario<br/>эластичности"]
     S1 -.-> V
-    S3 --> P[(Цены: yfinance →<br/>FRED/EIA → CSV)]
+    S3 --> P[("Цены: Yahoo, FRED, CSV")]
     S4 --> S3
-    PDF[PDF отчёты<br/>data/reports] -- ingest: чанки +<br/>метаданные --> V
+    PDF["PDF-отчёты в data/reports"] -->|"ingest: чанки и метаданные"| V
 ```
 
 ### Жизненный цикл одного хода
@@ -119,30 +121,30 @@ flowchart LR
 sequenceDiagram
     autonumber
     actor User as Пользователь
-    participant UI as Streamlit / CLI
+    participant UI as Streamlit или CLI
     participant G as LangGraph
-    participant RAG as Chroma (отчёты)
+    participant RAG as Chroma
     participant C as Claude
     participant T as Инструменты
-    participant S as SQLite + Langfuse
+    participant S as SQLite и Langfuse
 
     User->>UI: вопрос
     UI->>G: stream(вопрос, thread_id)
-    G->>S: загрузить историю диалога (checkpointer)
-    G->>RAG: retrieve_reports: top-6 по вопросу
+    G->>S: загрузить историю диалога
+    G->>RAG: retrieve_reports, top-6 по вопросу
     RAG-->>G: фрагменты с метками и score
-    loop пока Claude вызывает инструменты (не более 30 шагов графа)
+    loop пока Claude вызывает инструменты, не более 30 шагов графа
         G->>S: проверить дневной бюджет
-        G->>C: system + история + фрагменты (prompt caching)
+        G->>C: system, история, фрагменты (prompt caching)
         C-->>UI: стрим рассуждений и текста
         C-->>G: ответ или tool_calls
         G->>S: записать токены и стоимость
-        G->>T: search_reports / web_search / forecast / scenario
-        T-->>G: текст для модели + артефакт для UI
+        G->>T: search_reports, web_search, forecast, scenario
+        T-->>G: текст для модели и артефакт для UI
     end
-    G->>G: verify: сверить цитаты и числа ответа с полученным
+    G->>G: verify, сверка цитат и чисел ответа
     G->>S: сохранить состояние, ход и трейс
-    G-->>UI: ответ, проверка, доказательства, путь решения, стоимость
+    G-->>UI: ответ, проверка, доказательства, стоимость
 ```
 
 ### Граф и его состояние
@@ -197,21 +199,21 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    subgraph host[Ваша машина, только 127.0.0.1]
-        B[Браузер] -->|:8501| AN[analyst<br/>Streamlit + LangGraph]
-        B -->|:3000| LW[langfuse-web]
-        subgraph obs[профиль observability]
-            LW --- LWK[langfuse-worker]
-            LW --- PG[(Postgres)]
-            LW --- CH[(ClickHouse)]
-            LW --- RD[(Redis)]
-            LW --- MN[(MinIO)]
+    subgraph host["Ваша машина, порты только на 127.0.0.1"]
+        B["Браузер"] -->|"8501"| AN["analyst<br/>Streamlit + LangGraph"]
+        B -->|"3000"| LW["langfuse-web"]
+        subgraph obs["профиль observability"]
+            LW --- LWK["langfuse-worker"]
+            LW --- PG[("Postgres")]
+            LW --- CH[("ClickHouse")]
+            LW --- RD[("Redis")]
+            LW --- MN[("MinIO")]
         end
-        AN -->|трейсы, внутренняя сеть| LW
-        AN --- VOL[(volume analyst-data:<br/>Chroma, SQLite, отчёты)]
+        AN -->|"трейсы"| LW
+        AN --- VOL[("volume analyst-data<br/>Chroma, SQLite, отчёты")]
     end
-    AN -->|HTTPS| API[Anthropic API]
-    AN -->|HTTPS| EXT[Tavily / DuckDuckGo<br/>Yahoo / FRED / EIA]
+    AN -->|"HTTPS"| API["Anthropic API"]
+    AN -->|"HTTPS"| EXT["Tavily, DuckDuckGo,<br/>Yahoo, FRED, EIA"]
 ```
 
 Без Docker то же самое запускается одним процессом (`streamlit run`) с данными в `./data`;
@@ -258,6 +260,7 @@ Langfuse в этом режиме необязателен.
 | [`verification.py`](oilgas_analyst/verification.py) | Детерминированная проверка ответа: метки источников ↔ реально найденные фрагменты/веб/расчёты, числа ↔ тексты источников |
 | [`observability.py`](oilgas_analyst/observability.py) | Langfuse-трейсинг (сессия = диалог, ссылка на трейс), цены моделей и стоимость вызова с учётом кэша |
 | [`storage.py`](oilgas_analyst/storage.py) | SQLite: список диалогов, отрисованные ходы, расходы по каждому вызову, метаданные |
+| [`translate.py`](oilgas_analyst/translate.py) | Перевод резюме рассуждений на язык вопроса (Haiku 5.5, фоновый пул, в учёт стоимости) |
 | [`refresh.py`](oilgas_analyst/refresh.py) | Автообновление базы: новые выпуски STEO, переиндексация, снимок цен (фоновый поток раз в N дней) |
 | [`app/streamlit_app.py`](app/streamlit_app.py) | Стриминг шагов и ответа, вкладки «Доказательства / Путь решения / Проверка / Рассуждения», страницы PDF, график прогноза, история диалогов, расходы, обновление базы |
 
@@ -289,12 +292,19 @@ Langfuse в этом режиме необязателен.
   сама страница PDF; веб-источники с уровнем доверия и список отсеянного фильтром жёлтой прессы.
 - **Путь решения.** Шаг 1 (автопоиск по базе: сколько найдено и насколько релевантно) → реплики модели
   → вызовы инструментов с аргументами → краткие результаты → проверка.
-- **Рассуждения.** Краткое изложение хода мыслей Claude (thinking summary) — видно и вживую, пока
-  агент работает.
+- **Рассуждения.** Краткое изложение хода мыслей Claude (thinking summary). API отдаёт его
+  по-английски, поэтому каждый фрагмент в фоне переводится на язык вопроса (Claude Haiku 5.5, доли
+  цента за ход, учитывается в стоимости); оригинал доступен рядом. Переведённые фрагменты видны и
+  вживую, пока агент работает.
 - **Прогноз.** Вклад моделей ансамбля, MAPE бэктеста и веса; для сценариев — допущения и эффекты.
 
 ### Надёжность и UX
-- **Стриминг:** шаги графа и текст ответа появляются по мере работы (ход идёт 30–70 с).
+- **Стриминг:** пока агент работает, над ответом — свёрнутый статус с текущим этапом
+  («🔎 Ищу в отчётах…», «🌐 Ищу в интернете…», «✍️ Пишу ответ…»; полный лог — по раскрытию), текст
+  ответа печатается по мере генерации. Ход идёт 20–90 с.
+- **Смена модели посреди диалога:** Opus и Sonnet переключаются в боковой панели без потери контекста —
+  состояние диалога общее, история append-only, thinking-блоки другой модели API игнорирует. Кэш
+  промпта у каждой модели свой, поэтому первый ответ после переключения чуть дороже.
 - **История:** диалоги и состояние агента (включая thinking-блоки) хранятся в SQLite и переживают
   перезапуск; список диалогов — в боковой панели.
 - **Prompt caching:** автоматическая точка кэша на конце запроса — инструменты, системный промпт и
@@ -328,6 +338,7 @@ oilgas_analyst/          ядро
   observability.py       Langfuse, цены и стоимость
   storage.py             SQLite: диалоги, ходы, расходы
   refresh.py             автообновление базы
+  translate.py           перевод резюме рассуждений
   prompts.py             системный промпт роли
   tools.py               LangChain-инструменты (content + artifact)
   config.py              настройки из .env
@@ -336,6 +347,7 @@ oilgas_analyst/          ядро
   web/                   поиск и фильтр источников
   forecasting/           данные, модели, сценарии, фасад
 app/streamlit_app.py     UI
+.streamlit/config.toml   режим эксплуатации Streamlit (без вотчера, только 127.0.0.1)
 scripts/run_demo.py      прогон демо-сценариев
 scripts/init_env.py      .env + генерация секретов для docker compose
 data/reports/            PDF-отчёты + catalog.json

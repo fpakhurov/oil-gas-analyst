@@ -77,7 +77,7 @@ class AppStore:
         now = _now()
         self._execute(
             "INSERT INTO threads(thread_id, title, model, created_at, updated_at) VALUES (?,?,?,?,?) "
-            "ON CONFLICT(thread_id) DO UPDATE SET updated_at=excluded.updated_at",
+            "ON CONFLICT(thread_id) DO UPDATE SET updated_at=excluded.updated_at, model=excluded.model",
             (thread_id, title[:120], model, now, now),
         )
 
