@@ -175,3 +175,47 @@ def test_translation_prompt_names_target_language():
 
     assert "на русский язык" in _system_prompt("Что с ценой Brent?")
     assert "language of this question" in _system_prompt("Wie hoch ist der Brent-Preis?")
+
+
+def test_heal_tool_calls_inserts_results_right_after_dangling_call():
+    from oilgas_analyst.agent import INTERRUPTED_TOOL_TEXT, heal_tool_calls
+
+    dangling = AIMessage("", tool_calls=[{"name": "web_search", "args": {}, "id": "a"},
+                                         {"name": "search_reports", "args": {}, "id": "b"}])
+    msgs = [HumanMessage("q1"), dangling, ToolMessage("ok", tool_call_id="a", name="web_search"), HumanMessage("q2")]
+    healed = heal_tool_calls(msgs)
+    assert [type(m).__name__ for m in healed] == ["HumanMessage", "AIMessage", "ToolMessage", "ToolMessage",
+                                                  "HumanMessage"]
+    assert healed[3].tool_call_id == "b" and healed[3].content == INTERRUPTED_TOOL_TEXT
+    assert heal_tool_calls(healed) == healed  # идемпотентно: целая история не меняется
+    assert len(msgs) == 4  # исходная история не тронута
+
+
+def test_interrupted_turn_does_not_break_next_question(monkeypatch, settings):
+    """Ход обрывается во время выполнения инструмента (перезапуск сервера, перезапуск скрипта Streamlit):
+    вызов уже в истории, результата нет. Следующий вопрос должен уйти в модель с корректной историей."""
+
+    class Interrupted(BaseException):  # не Exception — ToolNode его не перехватит, как и реальный обрыв
+        pass
+
+    def broken_search(*a, **k):
+        raise Interrupted
+
+    monkeypatch.setattr(tools_mod, "_web_search", broken_search)
+    seen = []
+    _scripted(monkeypatch, [
+        AIMessage("", tool_calls=[{"name": "web_search", "args": {"query": "q"}, "id": "t1"}]),
+        AIMessage("Ответ на второй вопрос"),
+    ], seen)
+    analyst = OilGasAnalyst(settings, InMemorySaver())
+    with pytest.raises(Interrupted):
+        list(analyst.stream("Первый вопрос", "t5"))
+    state = analyst.graph.get_state({"configurable": {"thread_id": "t5"}}).values["messages"]
+    assert isinstance(state[-1], AIMessage) and state[-1].tool_calls  # вызов без результата в истории
+
+    turn = analyst.ask("Второй вопрос", "t5")
+    assert turn.answer == "Ответ на второй вопрос"
+    sent = seen[-1]
+    i = next(k for k, m in enumerate(sent) if isinstance(m, AIMessage) and m.tool_calls)
+    assert isinstance(sent[i + 1], ToolMessage) and sent[i + 1].tool_call_id == "t1"
+    assert isinstance(sent[i + 2], HumanMessage)  # дальше — новый вопрос

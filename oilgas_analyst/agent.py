@@ -98,6 +98,38 @@ def _is_rag_context(msg: BaseMessage) -> bool:
     return isinstance(msg, HumanMessage) and msg.additional_kwargs.get("rag_context", False)
 
 
+INTERRUPTED_TOOL_TEXT = "Вызов инструмента не выполнен: предыдущий ход был прерван до получения результата."
+
+
+def heal_tool_calls(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """Подставляет результат для вызовов инструментов, оставшихся без ответа.
+
+    Если ход оборвался между решением модели вызвать инструменты и их выполнением (перезапуск
+    сервера, перезапуск скрипта Streamlit по клику во время генерации), в истории остаётся
+    AIMessage с tool_calls без ToolMessage. API требует tool_result сразу за tool_use, и каждый
+    следующий вопрос в таком диалоге падал бы с 400. Чиним только запрос (история не трогается),
+    детерминированно — префикс запроса стабилен, prompt caching не ломается.
+    """
+    healed: list[BaseMessage] = []
+    i = 0
+    while i < len(messages):
+        m = messages[i]
+        healed.append(m)
+        i += 1
+        if not (isinstance(m, AIMessage) and m.tool_calls):
+            continue
+        answered = set()
+        while i < len(messages) and isinstance(messages[i], ToolMessage):
+            answered.add(messages[i].tool_call_id)
+            healed.append(messages[i])
+            i += 1
+        for tc in m.tool_calls:
+            if tc["id"] not in answered:
+                healed.append(ToolMessage(INTERRUPTED_TOOL_TEXT, tool_call_id=tc["id"], name=tc["name"],
+                                          status="error"))
+    return healed
+
+
 def _current_turn(messages: list[BaseMessage]) -> list[BaseMessage]:
     """Сообщения текущего хода: от последнего вопроса пользователя до конца."""
     for i in range(len(messages) - 1, -1, -1):
@@ -154,7 +186,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
             text = BUDGET_STOP_TEXT.format(spent=spent, limit=s.daily_budget_usd)
             return {"messages": [AIMessage(content=text, additional_kwargs={"budget_stop": True})]}
         system = SystemMessage(SYSTEM_PROMPT.format(today=date.today().strftime("%d.%m.%Y")))
-        response = llm.invoke([system, *state["messages"]], config)
+        response = llm.invoke([system, *heal_tool_calls(state["messages"])], config)
         model, usage = obs.usage_from_message(response, s.llm_model)
         thread_id = (config.get("configurable") or {}).get("thread_id")
         store.record_usage(thread_id, model, usage.input_tokens, usage.output_tokens,
